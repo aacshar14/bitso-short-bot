@@ -1,25 +1,50 @@
 import os
+import time
+import logging
+import sqlite3
+
 import ccxt
 import pandas as pd
 import pandas_ta as ta
-import sqlite3
 import requests
 from dotenv import load_dotenv
 
-# Cargar claves
 load_dotenv()
 
+# Configuración por entorno
 api_key = os.getenv("BITSO_API_KEY")
 api_secret = os.getenv("BITSO_SECRET_KEY")
 symbol = os.getenv("TRADE_SYMBOL", "btc_mxn")
 trade_percent = float(os.getenv("TRADE_PERCENT", 0.03))
+
+# Indicadores / estrategia
+ema_fast_len = int(os.getenv("EMA_FAST", 20))
+ema_slow_len = int(os.getenv("EMA_SLOW", 50))
+rsi_threshold = float(os.getenv("RSI_THRESHOLD", 70))
+macd_fast = int(os.getenv("MACD_FAST", 12))
+macd_slow = int(os.getenv("MACD_SLOW", 26))
+macd_signal = int(os.getenv("MACD_SIGNAL", 9))
+
+# Ejecución
+interval_seconds = int(os.getenv("INTERVAL_SECONDS", 300))
+run_once = os.getenv("RUN_ONCE", "0") == "1"
+
+# Telegram
 telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
 telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
 
+# Logging
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, log_level, logging.INFO),
+    format="%(asctime)s | %(levelname)s | %(message)s",
+)
+
 # Conexión a Bitso
 exchange = ccxt.bitso({
-    'apiKey': api_key,
-    'secret': api_secret
+    "apiKey": api_key,
+    "secret": api_secret,
+    "enableRateLimit": True,
 })
 
 # Base de datos
@@ -62,44 +87,113 @@ def send_telegram(message):
         print("Error al enviar mensaje:", e)
 
 # Data OHLC
-def get_ohlcv():
-    candles = exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
-    df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+def get_ohlcv() -> pd.DataFrame:
+    candles = exchange.fetch_ohlcv(symbol, timeframe="5m", limit=200)
+    df = pd.DataFrame(
+        candles,
+        columns=["timestamp", "open", "high", "low", "close", "volume"],
+    )
     return df
 
 # Estrategia
-def check_trade_signal(df):
-    df['ema20'] = ta.ema(df['close'], length=20)
-    df['ema50'] = ta.ema(df['close'], length=50)
-    df['rsi'] = ta.rsi(df['close'], length=14)
-    macd = ta.macd(df['close'])
-    df = pd.concat([df, macd], axis=1)
+def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    # EMA
+    df["ema_fast"] = ta.ema(df["close"], length=ema_fast_len)
+    df["ema_slow"] = ta.ema(df["close"], length=ema_slow_len)
+    # RSI
+    df["rsi"] = ta.rsi(df["close"], length=14)
+    # MACD
+    macd_df = ta.macd(
+        df["close"], fast=macd_fast, slow=macd_slow, signal=macd_signal
+    )
+    df = pd.concat([df, macd_df], axis=1)
+    return df
+
+
+def check_trade_signal(df: pd.DataFrame) -> tuple[bool, pd.Series]:
+    df = compute_indicators(df)
+    df = df.dropna()
+    if df.empty:
+        return False, pd.Series()
 
     last = df.iloc[-1]
-    return (
-        last['close'] < last['ema20'] < last['ema50']
-        and last['rsi'] > 70
-        and last['MACD_12_26_9'] < last['MACDs_12_26_9']
+    has_trend = last["close"] < last["ema_fast"] < last["ema_slow"]
+    is_overbought = last["rsi"] > rsi_threshold
+    # pandas_ta: MACD column names
+    macd_val = last.get(f"MACD_{macd_fast}_{macd_slow}_{macd_signal}")
+    macd_signal_val = last.get(f"MACDs_{macd_fast}_{macd_slow}_{macd_signal}")
+    macd_confirm = (
+        pd.notna(macd_val)
+        and pd.notna(macd_signal_val)
+        and macd_val < macd_signal_val
+    )
+
+    signal = bool(has_trend and is_overbought and macd_confirm)
+    return signal, last
+
+
+def log_indicators(last: pd.Series) -> None:
+    macd_key = f"MACD_{macd_fast}_{macd_slow}_{macd_signal}"
+    macds_key = f"MACDs_{macd_fast}_{macd_slow}_{macd_signal}"
+    macdh_key = f"MACDh_{macd_fast}_{macd_slow}_{macd_signal}"
+    logging.info(
+        "Indicadores | close=%.2f ema_fast=%.2f ema_slow=%.2f rsi=%.2f macd=%.4f macds=%.4f macdh=%.4f",
+        float(last.get("close", float("nan"))),
+        float(last.get("ema_fast", float("nan"))),
+        float(last.get("ema_slow", float("nan"))),
+        float(last.get("rsi", float("nan"))),
+        float(last.get(macd_key, float("nan"))),
+        float(last.get(macds_key, float("nan"))),
+        float(last.get(macdh_key, float("nan"))),
     )
 
 # Ejecución de orden (simulada)
 def execute_trade():
     balance = exchange.fetch_balance()
-    mxn_balance = balance['total'].get('mxn', 0)
+    mxn_balance = balance["total"].get("mxn", 0)
     ticker = exchange.fetch_ticker(symbol)
-    price = ticker['last']
+    price = ticker["last"]
     amount = round((mxn_balance * trade_percent) / price, 6)
 
     log_trade(symbol, price, amount, "short")
-    msg = f"💥 Señal SHORT para {symbol}\n💰 Precio: {price} MXN\n📉 Monto estimado: {amount}"
+    msg = (
+        f"💥 Señal SHORT para {symbol}\n💰 Precio: {price} MXN\n📉 Monto estimado: {amount}"
+    )
     send_telegram(msg)
-    print(msg)
+    logging.info(msg)
 
 # Main
 if __name__ == "__main__":
+    logging.info(
+        "Inicio Bot | symbol=%s ema_fast=%d ema_slow=%d rsi_thr=%.2f interval=%ds",
+        symbol,
+        ema_fast_len,
+        ema_slow_len,
+        rsi_threshold,
+        interval_seconds,
+    )
+
     init_db()
-    df = get_ohlcv()
-    if check_trade_signal(df):
-        execute_trade()
+
+    def run_cycle():
+        try:
+            df = get_ohlcv()
+            signal, last = check_trade_signal(df)
+            if not last.empty:
+                log_indicators(last)
+            if signal:
+                execute_trade()
+            else:
+                logging.info("Sin señal de short.")
+        except Exception as e:
+            logging.exception("Error en ciclo: %s", e)
+
+    if run_once:
+        run_cycle()
     else:
-        print("Sin señal de short.")
+        while True:
+            start_ts = time.time()
+            run_cycle()
+            elapsed = time.time() - start_ts
+            sleep_for = max(1, interval_seconds - int(elapsed))
+            time.sleep(sleep_for)
