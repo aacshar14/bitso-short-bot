@@ -29,6 +29,11 @@ macd_signal = int(os.getenv("MACD_SIGNAL", 9))
 interval_seconds = int(os.getenv("INTERVAL_SECONDS", 300))
 run_once = os.getenv("RUN_ONCE", "0") == "1"
 
+# Heartbeat (alerta aunque no haya señal)
+heartbeat_on_no_signal = os.getenv("HEARTBEAT_ON_NO_SIGNAL", "0") == "1"
+heartbeat_every_cycles = max(1, int(os.getenv("HEARTBEAT_EVERY_CYCLES", 1)))
+heartbeat_prefix = os.getenv("HEARTBEAT_PREFIX", "Estado")
+
 # Telegram
 telegram_token = os.getenv("TELEGRAM_BOT_TOKEN")
 telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
@@ -175,7 +180,7 @@ if __name__ == "__main__":
 
     init_db()
 
-    def run_cycle():
+    def run_cycle(cycle_index: int):
         try:
             df = get_ohlcv()
             signal, last = check_trade_signal(df)
@@ -185,15 +190,32 @@ if __name__ == "__main__":
                 execute_trade()
             else:
                 logging.info("Sin señal de short.")
+                if heartbeat_on_no_signal and (cycle_index % heartbeat_every_cycles == 0):
+                    try:
+                        price_val = None
+                        try:
+                            price_val = float(last.get("close")) if not last.empty else None
+                        except Exception:
+                            price_val = None
+                        msg = (
+                            f"⏰ {heartbeat_prefix}: sin señal para {symbol}"
+                            + (f" | precio≈{price_val:.2f} MXN" if price_val else "")
+                        )
+                        send_telegram(msg)
+                        logging.info("Heartbeat enviado: %s", msg)
+                    except Exception as hb_e:
+                        logging.warning("No se pudo enviar heartbeat: %s", hb_e)
         except Exception as e:
             logging.exception("Error en ciclo: %s", e)
 
     if run_once:
-        run_cycle()
+        run_cycle(cycle_index=1)
     else:
+        cycle = 1
         while True:
             start_ts = time.time()
-            run_cycle()
+            run_cycle(cycle_index=cycle)
             elapsed = time.time() - start_ts
             sleep_for = max(1, interval_seconds - int(elapsed))
             time.sleep(sleep_for)
+            cycle += 1

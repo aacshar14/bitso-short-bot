@@ -44,6 +44,11 @@ INTERVAL_SECONDS=300
 RUN_ONCE=0
 LOG_LEVEL=INFO
 
+# Heartbeat (alertas sin señal)
+HEARTBEAT_ON_NO_SIGNAL=0
+HEARTBEAT_EVERY_CYCLES=1
+HEARTBEAT_PREFIX=Estado
+
 # Telegram (opcional)
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_CHAT_ID=
@@ -67,6 +72,26 @@ docker run --rm --env-file .env -e RUN_ONCE=1 -e LOG_LEVEL=INFO bitso-short-bot
 
 ```bash
 docker run --rm --env-file .env -e INTERVAL_SECONDS=60 bitso-short-bot
+```
+
+### ⏰ Heartbeat cada 30 minutos
+
+Para enviar un mensaje de “estado” aunque no haya señal, cada 30 minutos:
+
+```bash
+docker run -d --name bitso-short-bot \
+  --restart unless-stopped \
+  --env-file .env \
+  -e INTERVAL_SECONDS=1800 \
+  -e HEARTBEAT_ON_NO_SIGNAL=1 \
+  -e HEARTBEAT_EVERY_CYCLES=1 \
+  bitso-short-bot
+```
+
+Ver logs:
+
+```bash
+docker logs -f bitso-short-bot
 ```
 
 ## 📌 Logging y base de datos
