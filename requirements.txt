@@ -1,4 +1,5 @@
 ccxt
+numpy==1.26.4
 pandas
 pandas-ta
 python-dotenv
