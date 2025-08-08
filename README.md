@@ -5,12 +5,12 @@ Bot de trading en corto para Bitso con estrategia técnica simple (EMA, RSI, MAC
 ## 🚀 Requisitos
 
 - Cuenta en Bitso con API key
-- Bot de Telegram y chat ID
 - Docker
+- (Opcional) Bot de Telegram y chat ID
 
 ## 🛠️ Instalación
 
-1. Copia `.env.template` a `.env` y agrega tus claves
+1. Crea tu `.env` a partir de `.env.example` y agrega tus claves
 2. Construye el contenedor:
 
 ```bash
@@ -23,19 +23,60 @@ docker build -t bitso-short-bot .
 docker run --env-file .env bitso-short-bot
 ```
 
-## 📊 Indicadores
+## ⚙️ Variables de entorno (`.env.example`)
 
-- EMA 20 & 50
-- RSI 14
-- MACD
+```
+BITSO_API_KEY=
+BITSO_SECRET_KEY=
 
-## 📌 Logging
+# Estrategia
+TRADE_SYMBOL=btc_mxn
+TRADE_PERCENT=0.03
+EMA_FAST=20
+EMA_SLOW=50
+RSI_THRESHOLD=70
+MACD_FAST=12
+MACD_SLOW=26
+MACD_SIGNAL=9
 
-Se guarda cada operación en una base de datos SQLite (`trades.db`).
+# Ejecución
+INTERVAL_SECONDS=300
+RUN_ONCE=0
+LOG_LEVEL=INFO
+
+# Telegram (opcional)
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+## 📊 Indicadores y señales
+
+- EMA rápida vs lenta: condición de tendencia (precio < EMA rápida < EMA lenta)
+- RSI 14 > umbral (por defecto 70)
+- MACD < línea de señal
+
+## 🔎 Diagnóstico y ejecuciones
+
+- Ejecución única con logs (debug):
+
+```bash
+docker run --rm --env-file .env -e RUN_ONCE=1 -e LOG_LEVEL=INFO bitso-short-bot
+```
+
+- Ejecución continua cada N segundos:
+
+```bash
+docker run --rm --env-file .env -e INTERVAL_SECONDS=60 bitso-short-bot
+```
+
+## 📌 Logging y base de datos
+
+- Logs en stdout con nivel configurable por `LOG_LEVEL`
+- Bitácora de operaciones en `trades.db` (SQLite)
 
 ## 📩 Telegram
 
-Recibirás alertas cada vez que se detecte una señal de short.
+Recibirás alertas cuando se detecte una señal de short si configuras el bot y chat ID.
 
 ---
 

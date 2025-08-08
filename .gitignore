@@ -1,1 +1,4 @@
-/.env.template
+.env
+__pycache__/
+*.pyc
+trades.db
