@@ -1,6 +1,6 @@
 ccxt
 numpy==1.26.4
-pandas
-pandas-ta
+pandas==2.1.4
+pandas-ta==0.3.14b0
 python-dotenv
 requests
